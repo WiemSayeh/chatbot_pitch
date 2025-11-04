@@ -1,0 +1,20 @@
+# Gestion des PDF
+PyMuPDF==1.22.5
+
+# Embeddings et NLP
+sentence-transformers==2.2.2
+faiss-cpu==1.7.4
+numpy==1.26.0
+tqdm==4.66.1
+
+# Web requests et API
+requests==2.31.0
+
+# Optionnel : pour manipulation JSON et OS (standard, mais mentionné ici)
+# pas besoin d'installation, inclus dans Python
+
+# Pour l'interface du chatbot si nécessaire
+flask==2.3.5
+
+# Pour intégration avec Ollama
+ollama-client==0.1.0  # Remplace par la version exacte si différente
