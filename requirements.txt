@@ -22,3 +22,4 @@ SpeechRecognition
 PyAudio
 pyttsx3
 gTTS
+prompt_toolkit

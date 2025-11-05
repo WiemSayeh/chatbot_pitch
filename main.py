@@ -2,104 +2,113 @@ import speech_recognition as sr
 import pyttsx3
 from retriever import retrieve
 from generator import generate_answer
+from prompt_toolkit import prompt
+from prompt_toolkit.shortcuts import CompleteStyle
+
+STOP_WORDS = ["stop", "stoppe", "stope", "terminé", "termine", "terminer"]
+
 
 # === Synthèse vocale ===
 def speak(text):
+    """
+    Fait parler le chatbot (voix naturelle locale).
+    """
     engine = pyttsx3.init()
-    engine.setProperty("rate", 170)
+    engine.setProperty("rate", 170)  # vitesse
     voices = engine.getProperty("voices")
-    engine.setProperty("voice", voices[0].id)
+    # Essaie de trouver une voix française si possible
+    for v in voices:
+        if "fr" in v.languages or "French" in v.name:
+            engine.setProperty("voice", v.id)
+            break
     engine.say(text)
     engine.runAndWait()
 
-# === Reconnaissance vocale longue ===
-def listen_long():
-    """
-    Écoute la voix de l’utilisateur sans couper trop vite.
-    L’écoute se termine seulement si :
-    - l’utilisateur dit 'stop', 'terminé', ou 'quitter'
-    - un silence très long est détecté
-    """
-    r = sr.Recognizer()
-    with sr.Microphone() as source:
-        print("\n🎙️  Vous pouvez parler. (Dites 'terminé' ou 'stop' pour envoyer la requête)")
-        r.adjust_for_ambient_noise(source, duration=1)
-        audio_data = []
-        silent_count = 0
-        print("🎧 En écoute...")
 
+# === Écoute continue jusqu'à un mot d'arrêt ===
+def listen_until_stop():
+    recognizer = sr.Recognizer()
+    mic = sr.Microphone()
+    print("\n🎙️  Vous pouvez parler. (Dites 'terminé' ou 'stop' pour envoyer la requête)")
+    print("🎧 En écoute...\n")
+
+    full_text = ""
+    try:
         while True:
+            with mic as source:
+                recognizer.adjust_for_ambient_noise(source)
+                print("🎤 Parlez maintenant...")
+                audio = recognizer.listen(source, timeout=None, phrase_time_limit=None)
+
             try:
-                # écoute par segments courts (phrase par phrase)
-                audio = r.listen(source, phrase_time_limit=10, timeout=None)
-                text = r.recognize_google(audio, language="fr-FR").lower()
+                text = recognizer.recognize_google(audio, language="fr-FR").strip()
                 print(f"🗣️  {text}")
-
-                # si l'utilisateur dit "terminé" → fin
-                if any(stop_word in text for stop_word in ["terminé", "stop", "quitter", "envoyer"]):
-                    print("✅ Fin de la prise de parole.")
+                if any(stop in text.lower() for stop in STOP_WORDS):
+                    print("🛑 Arrêt de l'écoute.")
                     break
-
-                audio_data.append(text)
-                silent_count = 0
-
+                full_text += " " + text
             except sr.UnknownValueError:
-                silent_count += 1
-                if silent_count >= 3:
-                    print("🤫 Silence prolongé détecté, arrêt de l'écoute.")
-                    break
-            except KeyboardInterrupt:
-                print("\n🛑 Arrêt manuel.")
+                print("🤔 (Je n’ai pas compris, continuez...)")
+            except sr.RequestError:
+                print("❌ Erreur de reconnaissance vocale.")
                 break
+    except KeyboardInterrupt:
+        print("\n🛑 Enregistrement interrompu manuellement.")
+        return full_text.strip()
 
-    # joindre toutes les phrases détectées
-    final_text = " ".join(audio_data).strip()
-    if not final_text:
-        print("❌ Aucun texte détecté.")
-        return None
-    return final_text
+    return full_text.strip()
 
-# === Correction du texte reconnu ===
-def edit_text(initial_text):
+
+# === Correction inline ===
+def correction_step(detected_text):
     print("\n✏️  Correction du texte :")
-    print("(Appuyez sur Entrée sans rien écrire pour valider la version actuelle)\n")
-    print("👉 Corrigez ci-dessous et appuyez sur Entrée : ", end="")
-    user_edit = input(initial_text).strip()
-    return user_edit if user_edit else initial_text
+    print("(Modifiez directement le texte si nécessaire, puis appuyez sur Entrée)\n")
+
+    corrected = prompt(
+        f"👉 Corrigez ci-dessous : ",
+        default=detected_text,  # prérempli
+        complete_style=CompleteStyle.READLINE_LIKE
+    ).strip()
+
+    print(f"\n✅ Texte corrigé : {corrected}\n")
+    return corrected
+
 
 # === Boucle principale ===
 def main():
     print("🤖 Chatbot RAG vocal avec Ollama (LLaMA 3)")
-    print("--------------------------------------------------")
+    print("--------------------------------------------------\n")
 
     while True:
-        # 🎧 Écoute prolongée
-        query = listen_long()
-        if not query:
-            continue
+        try:
+            spoken_text = listen_until_stop()
+            if not spoken_text:
+                print("⚠️ Aucune entrée détectée.")
+                continue
 
-        # 📴 Quitter
-        if query.lower() in ["terminé", "exit", "quitter", "stop"]:
-            print("\n👋 Fin du programme.")
-            speak("Au revoir !")
+            corrected_text = correction_step(spoken_text)
+            if corrected_text.lower() in ["exit", "quitter"]:
+                print("👋 Fin du programme.")
+                speak("Au revoir !")
+                break
+
+            print("📚 Recherche des passages pertinents...")
+            passages = retrieve(corrected_text)
+            
+            print("\n💡 Génération de la réponse...\n")
+            answer = generate_answer(corrected_text, passages)
+            
+            print("💬 Réponse du chatbot :")
+            print(answer)
+            print("\n" + "="*60 + "\n")
+
+            # 🔊 Le chatbot lit la réponse à voix haute
+            speak(answer)
+
+        except KeyboardInterrupt:
+            print("\n🛑 Programme arrêté manuellement.")
             break
 
-        # ✏️ Correction légère avant envoi
-        query = edit_text(query)
-
-        # 🔍 Récupération des passages
-        print("\n📚 Recherche des passages pertinents...")
-        passages = retrieve(query)
-
-        # 💡 Génération de la réponse
-        print("\n💡 Génération de la réponse...\n")
-        answer = generate_answer(query, passages)
-
-        # 🗣️ Affichage + synthèse vocale
-        print("💬 Réponse du chatbot :")
-        print(answer)
-        print("\n" + "="*60 + "\n")
-        speak(answer)
 
 if __name__ == "__main__":
     main()
