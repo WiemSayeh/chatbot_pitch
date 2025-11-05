@@ -18,3 +18,7 @@ flask==2.3.5
 
 # Pour intégration avec Ollama
 ollama-client==0.1.0  # Remplace par la version exacte si différente
+SpeechRecognition
+PyAudio
+pyttsx3
+gTTS
