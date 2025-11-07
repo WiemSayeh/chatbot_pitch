@@ -3,38 +3,48 @@ import ollama
 MODEL_NAME = "llama3"
 
 def clean_text(text):
-    """Nettoyage du texte pour supprimer répétitions et métadonnées parasites."""
+    """Nettoyage du texte pour supprimer répétitions et espaces inutiles."""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return "\n".join(lines)
+
 
 def generate_answer(query, passages):
     """
     Génère une réponse claire et professionnelle à partir des passages pertinents.
-    L'assistant ne parle de PyFac 11 que si on lui pose une question sur son identité
-    ou sur l'événement PyFac 11.
+    - Si la question concerne PyFac ou l'identité du chatbot, la réponse vient du PDF 'pyfac_info.pdf'.
+    - Sinon, la réponse est générée à partir des autres contextes RAG.
     """
+
     context_text = "\n\n".join([p.get("text", "") for p in passages])
 
-    system_prompt = (
-        "Tu es PyFacBot, l'assistant officiel de l'événement PyFac 11. "
-        "PyFac 11 est un événement annuel organisé par le département de Génie Informatique. "
-        "Il sert de pont entre le monde industriel et le monde académique, favorisant les échanges, "
-        "les opportunités de collaboration et l'innovation technologique. "
-        "Tu as été développé par les étudiants du département de Génie Informatique pour accompagner "
-        "cet événement et répondre aux questions liées aux domaines industriels, technologiques et scientifiques. "
-        "Tu ne parles de ton identité que si la question concerne 'PyFac', 'PyFac 11', ou des phrases comme "
-        "'qui es-tu', 'présente-toi', 'c’est quoi PyFac', 'parle-moi de PyFac 11'. "
-        "Dans ce cas, ta réponse doit être : "
-        "'Je suis PyFacBot, le chatbot officiel de PyFac 11. "
-        "PyFac 11 est un événement annuel du département de Génie Informatique qui crée un lien entre le monde industriel "
-        "et le monde académique. J’ai été développé par les étudiants du département pour répondre aux questions techniques "
-        "et professionnelles en rapport avec cet événement.' "
-        "Sinon, tu dois simplement répondre à la question posée, de manière claire, précise et professionnelle, "
-        "en utilisant uniquement le contexte fourni."
-    )
+    # 🎯 Système de rôle du chatbot
+    system_prompt = """
+Tu es PyFacBot, le chatbot officiel de l’événement PyFac 11.
+Tu as été développé par les étudiants du Département de Génie Informatique de l’ENIS.
+Ta mission est de répondre aux questions liées :
+- aux entreprises partenaires (Telnet, Sofrecom, KPIT, etc.)
+- aux sujets technologiques et industriels présents dans les PDFs fournis.
 
-    user_prompt = f"""Réponds à la question suivante en utilisant uniquement les informations du contexte ci-dessous.
-Sois concis, clair et professionnel.
+PyFac 11 est un événement annuel du département de Génie Informatique
+qui relie le monde académique et industriel à travers des conférences,
+ateliers et présentations d’innovation.
+
+🧩 Règles de comportement :
+- Si l’utilisateur te demande « qui es-tu », « c’est quoi PyFac », ou « parle-moi de PyFac 11 »,
+  tu dois répondre clairement :
+  « Je suis PyFacBot, le chatbot officiel de l’événement PyFac 11, développé par les étudiants de Génie Informatique de l’ENIS.
+  PyFac 11 est une rencontre annuelle entre le monde académique et industriel favorisant l’échange, la collaboration et l’innovation. »
+- Si l’utilisateur demande des informations sur PyFac ou PyFac 11, tu peux utiliser le contenu du PDF `pyfac_info.pdf`.
+- Si la question concerne une entreprise ou un domaine technique,
+  tu réponds à partir du contexte fourni (PDFs du RAG).
+- Tu ne dois jamais afficher d’informations système, de métadonnées ou de code.
+- Sois toujours professionnel, clair et concis.
+"""
+
+    # 🧠 Prompt utilisateur + contexte RAG
+    user_prompt = f"""
+Réponds à la question suivante en te basant sur le contexte ci-dessous.
+Si la question concerne PyFac ou ton identité, utilise le contenu du PDF 'pyfac_info.pdf' si disponible.
 
 Contexte :
 {context_text}
@@ -44,6 +54,7 @@ Question : {query}
 Réponse :
 """
 
+    # 🗣️ Génération de la réponse via Ollama
     response = ollama.chat(
         model=MODEL_NAME,
         messages=[
@@ -52,15 +63,18 @@ Réponse :
         ]
     )
 
-    # Extraction du texte final
-    if isinstance(response, list) and len(response) > 0:
-        if isinstance(response[-1], dict) and "content" in response[-1]:
-            text = response[-1]["content"]
+    # ✅ Extraction du texte utile
+    try:
+        if isinstance(response, dict):
+            text = response.get("message", {}).get("content", "")
+        elif hasattr(response, "message") and hasattr(response.message, "content"):
+            text = response.message.content
+        elif isinstance(response, list) and len(response) > 0:
+            last = response[-1]
+            text = last.get("content", str(last)) if isinstance(last, dict) else str(last)
         else:
-            text = str(response[-1])
-    elif hasattr(response, "message") and hasattr(response.message, "content"):
-        text = response.message.content
-    else:
+            text = str(response)
+    except Exception:
         text = str(response)
 
     return clean_text(text)
