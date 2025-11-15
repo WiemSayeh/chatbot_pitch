@@ -23,3 +23,10 @@ PyAudio
 pyttsx3
 gTTS
 prompt_toolkit
+fastapi
+uvicorn
+openai-whisper
+soundfile
+pydub
+noisereduce
+numpy

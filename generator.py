@@ -1,80 +1,87 @@
 import ollama
+import re
+from langdetect import detect
 
-MODEL_NAME = "llama3"
+MAX_CONTEXT_CHARS = 4000
 
+# ===== Fonctions utilitaires =====
 def clean_text(text):
-    """Nettoyage du texte pour supprimer répétitions et espaces inutiles."""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return "\n".join(lines)
 
+def sanitize_text(text):
+    text = text.replace("*", "").replace("+", "")
+    text = re.sub(r"\n+", "\n", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
-def generate_answer(query, passages):
-    """
-    Génère une réponse claire et professionnelle à partir des passages pertinents.
-    - Si la question concerne PyFac ou l'identité du chatbot, la réponse vient du PDF 'pyfac_info.pdf'.
-    - Sinon, la réponse est générée à partir des autres contextes RAG.
-    """
+def structure_response(text):
+    sentences = re.split(r'(?<=[.!?]) +', text)
+    structured = []
+    seen = set()
+    for s in sentences:
+        s = s.strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        structured.append(f"• {s}" if len(s) > 50 else s)
+    return "\n".join(structured)
 
-    context_text = "\n\n".join([p.get("text", "") for p in passages])
+def truncate_context(passages):
+    context = ""
+    for p in passages:
+        text = sanitize_text(clean_text(p['text']))
+        context += "\n" + text
+    return context.strip()
 
-    # 🎯 Système de rôle du chatbot
-    system_prompt = """
-Tu es PyFacBot, le chatbot officiel de l’événement PyFac 11.
-Tu as été développé par les étudiants du Département de Génie Informatique de l’ENIS.
-Ta mission est de répondre aux questions liées :
-- aux entreprises partenaires (Telnet, Sofrecom, KPIT, etc.)
-- aux sujets technologiques et industriels présents dans les PDFs fournis.
+# ===== Gestion salutations / remerciements / au revoir =====
+SALUTATIONS = ["bonjour", "salut", "coucou", "hello", "hi", "hey"]
+AUREVOIRS = ["au revoir", "à bientôt", "ciao", "bye", "goodbye", "see you"]
+THANKS = ["merci", "merci beaucoup", "thanks", "thank you", "thx"]
 
-PyFac 11 est un événement annuel du département de Génie Informatique
-qui relie le monde académique et industriel à travers des conférences,
-ateliers et présentations d’innovation.
-
-🧩 Règles de comportement :
-- Si l’utilisateur te demande « qui es-tu », « c’est quoi PyFac », ou « parle-moi de PyFac 11 »,
-  tu dois répondre clairement :
-  « Je suis PyFacBot, le chatbot officiel de l’événement PyFac 11, développé par les étudiants de Génie Informatique de l’ENIS.
-  PyFac 11 est une rencontre annuelle entre le monde académique et industriel favorisant l’échange, la collaboration et l’innovation. »
-- Si l’utilisateur demande des informations sur PyFac ou PyFac 11, tu peux utiliser le contenu du PDF `pyfac_info.pdf`.
-- Si la question concerne une entreprise ou un domaine technique,
-  tu réponds à partir du contexte fourni (PDFs du RAG).
-- Tu ne dois jamais afficher d’informations système, de métadonnées ou de code.
-- Sois toujours professionnel, clair et concis.
-"""
-
-    # 🧠 Prompt utilisateur + contexte RAG
-    user_prompt = f"""
-Réponds à la question suivante en te basant sur le contexte ci-dessous.
-Si la question concerne PyFac ou ton identité, utilise le contenu du PDF 'pyfac_info.pdf' si disponible.
-
-Contexte :
-{context_text}
-
-Question : {query}
-
-Réponse :
-"""
-
-    # 🗣️ Génération de la réponse via Ollama
-    response = ollama.chat(
-        model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-    )
-
-    # ✅ Extraction du texte utile
+def check_special_input(query):
+    lang = "fr"
     try:
-        if isinstance(response, dict):
-            text = response.get("message", {}).get("content", "")
-        elif hasattr(response, "message") and hasattr(response.message, "content"):
-            text = response.message.content
-        elif isinstance(response, list) and len(response) > 0:
-            last = response[-1]
-            text = last.get("content", str(last)) if isinstance(last, dict) else str(last)
-        else:
-            text = str(response)
-    except Exception:
-        text = str(response)
+        lang_detected = detect(query)
+        if lang_detected in ["en", "fr"]:
+            lang = lang_detected
+    except:
+        pass
+    q_lower = query.lower()
+    if any(word in q_lower for word in SALUTATIONS):
+        return ("Hello! 👋 I am PyFacBot, ready to assist you!" if lang=="en"
+                else "Bonjour ! 👋 Je suis PyFacBot, ravi de vous aider !"), lang
+    if any(word in q_lower for word in THANKS):
+        return ("You're welcome! 😊" if lang=="en"
+                else "Je vous en prie ! 😊"), lang
+    if any(word in q_lower for word in AUREVOIRS):
+        return ("Goodbye! 👋 See you soon." if lang=="en" 
+                else "Au revoir ! 👋 À bientôt."), lang   
+    return None, lang
 
-    return clean_text(text)
+# ===== Génération réponse RAG =====
+def generate_answer(query, passages, lang="fr"):
+    if not passages:
+        return "Désolé, je n'ai pas d'information sur ce sujet." if lang=="fr" else "Sorry, I don't have information on that."
+
+    context_text = truncate_context(passages)
+
+    if lang=="en":
+        system_prompt = "You are PyFacBot, official chatbot. Answer clearly and concisely using bullet points."
+        user_prompt = f"Context:\n{context_text}\n\nQuestion: {query}\nAnswer concisely with bullet points."
+    else:
+        system_prompt = "Tu es PyFacBot, le chatbot officiel. Réponds clairement et de manière concise en utilisant des tirets."
+        user_prompt = f"Contexte:\n{context_text}\n\nQuestion: {query}\nFournis une réponse concise et structurée avec des points clés."
+
+    try:
+        response = ollama.chat(
+            model="mistral",
+            messages=[{"role": "system", "content": system_prompt},
+                      {"role": "user", "content": user_prompt}]
+        )
+    except Exception as e:
+        return f"Erreur lors de la génération : {e}"
+
+    text = getattr(response, "message", None)
+    text = text.content if text else str(response)
+    return structure_response(clean_text(text))

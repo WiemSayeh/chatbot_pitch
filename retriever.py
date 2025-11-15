@@ -2,30 +2,37 @@ import json
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-CHUNK_FILE = "chunks_data.json"
+# ======================
+# ⚙️ Configuration
+# ======================
+CHUNK_FILE = "chunks_data.json"   # Fichier JSON des PDF découpés
 EMBED_MODEL = "all-MiniLM-L6-v2"
 
-def cosine_similarity(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+print("🧠 Chargement du modèle d'embedding...")
+embedding_model = SentenceTransformer(EMBED_MODEL)
 
-def retrieve(query, top_k=3):
-    with open(CHUNK_FILE, "r", encoding="utf-8") as f:
-        chunks = json.load(f)
+print("📂 Chargement des embeddings depuis le fichier JSON...")
+with open(CHUNK_FILE, "r", encoding="utf-8") as f:
+    CHUNKS = json.load(f)
 
-    model = SentenceTransformer(EMBED_MODEL)
-    query_emb = model.encode([query])[0]
+EMBEDDINGS = np.array([c["embedding"] for c in CHUNKS])
+EMBED_NORMS = np.linalg.norm(EMBEDDINGS, axis=1)
 
-    scores = []
-    for c in chunks:
-        sim = cosine_similarity(query_emb, np.array(c["embedding"]))
-        scores.append((sim, c))
+def retrieve(query, top_k=5):
+    """
+    Récupère les passages les plus pertinents pour une requête.
+    """
+    query_emb = embedding_model.encode([query])[0]
+    query_norm = np.linalg.norm(query_emb)
+    sims = np.dot(EMBEDDINGS, query_emb) / (EMBED_NORMS * query_norm + 1e-10)
 
-    scores.sort(key=lambda x: x[0], reverse=True)
-    top_chunks = scores[:top_k]
+    top_idx = np.argsort(sims)[::-1][:top_k]
+    top_chunks = [CHUNKS[i] for i in top_idx]
 
     print("\n=== Paragraphes pertinents ===")
-    for i, (score, c) in enumerate(top_chunks):
-        print(f"\n[{i+1}] PDF: {c['pdf']} | Score: {score:.4f}")
-        print(c['text'][:500] + ("..." if len(c['text']) > 500 else ""))  # tronqué
+    for i, idx in enumerate(top_idx):
+        c = CHUNKS[idx]
+        print(f"\n[{i+1}] PDF: {c['pdf']} | Score: {sims[idx]:.4f}")
+        print(c['text'][:400] + ("..." if len(c['text']) > 400 else ""))
 
-    return [c for _, c in top_chunks]
+    return top_chunks
